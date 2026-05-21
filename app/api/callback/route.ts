@@ -76,8 +76,9 @@ function normalizeXPayoutStatus(payload: any): 'processing' | 'failed' | 'succes
     result?.payment_status,
     result?.order_status
   ]
-    .filter((value) => value !== undefined && value !== null)
+    .filter((value) => value !== undefined && value !== null && value !== true && value !== false)
     .map((value) => String(value).toLowerCase().trim())
+    .filter((val) => val !== 'true' && val !== 'false')
     .join(' ');
 
   const providerText = [
@@ -93,23 +94,24 @@ function normalizeXPayoutStatus(payload: any): 'processing' | 'failed' | 'succes
     result?.message,
     result?.success
   ]
-    .filter((value) => value !== undefined && value !== null)
+    .filter((value) => value !== undefined && value !== null && value !== true && value !== false)
     .map((value) => String(value).toLowerCase().trim())
+    .filter((val) => val !== 'true' && val !== 'false')
     .join(' ');
 
   if (/\b(processing|pending|initiated|created|queued|open)\b/.test(explicitStatusText)) {
     return 'processing';
   }
 
-  if (/\b(failed|failure|false|reversed|reverse|timeout|timed\s*out|expired|expire|cancelled|canceled|declined|rejected|error|aborted)\b/.test(explicitStatusText) || explicitStatusText === '0') {
+  if (/\b(failed|failure|reversed|reverse|timeout|timed\s*out|expired|expire|cancelled|canceled|declined|rejected|error|aborted)\b/.test(explicitStatusText) || explicitStatusText === '0') {
     return 'failed';
   }
 
-  if (/\b(success|successful|completed|complete|paid|captured|credit|credited|approved|true)\b/.test(explicitStatusText) || explicitStatusText === '1') {
+  if (/\b(success|successful|completed|complete|paid|captured|credit|credited|approved)\b/.test(explicitStatusText) || explicitStatusText === '1') {
     return 'success';
   }
 
-  if (/\b(failed|failure|false|reversed|reverse|timeout|timed\s*out|expired|expire|cancelled|canceled|declined|rejected|error|aborted)\b/.test(providerText)) {
+  if (/\b(failed|failure|reversed|reverse|timeout|timed\s*out|expired|expire|cancelled|canceled|declined|rejected|error|aborted)\b/.test(providerText)) {
     return 'failed';
   }
 
