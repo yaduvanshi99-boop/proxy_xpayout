@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 const DEFAULT_TARGET_URL = 'https://connect.payatme.com/api/callback/API-MP9K1VPD-3ZYQ';
+const DEFAULT_PAYOUT_TARGET_URL = 'https://connect.payatme.com/api/callback/API-MPCNUX3V-MJUS';
 
 function firstPresent(...values: any[]): string | null {
   for (const value of values) {
@@ -151,7 +152,10 @@ function buildForwardPayload(payload: any): any {
 }
 
 async function forwardToConnect(payload: any, req: NextRequest): Promise<any> {
-  const targetUrl = process.env.CONNECT_CALLBACK_URL || DEFAULT_TARGET_URL;
+  const isPayout = payload?.service_type === 'payout';
+  const defaultTarget = isPayout ? DEFAULT_PAYOUT_TARGET_URL : DEFAULT_TARGET_URL;
+  const envTarget = isPayout ? process.env.CONNECT_PAYOUT_CALLBACK_URL : process.env.CONNECT_CALLBACK_URL;
+  const targetUrl = envTarget || defaultTarget;
   const timeoutMs = Number(process.env.FORWARD_TIMEOUT_MS || 2500);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
