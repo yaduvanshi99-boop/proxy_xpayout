@@ -1,6 +1,6 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest, NextResponse, after } from 'next/server';
 
-const DEFAULT_TARGET_URL = 'https://connect.payatme.com/api/callback/API-MP9K1VPD-3ZYQ';
+const DEFAULT_TARGET_URL = 'https://connect.payatme.com/api/callback/API-MPINKLSR-IBVI';
 const DEFAULT_PAYOUT_TARGET_URL = 'https://connect.payatme.com/api/callback/API-MPCNUX3V-MJUS';
 
 function firstPresent(...values: any[]): string | null {
@@ -59,6 +59,22 @@ function mergeQuery(body: any, searchParams: URLSearchParams): any {
 
 function normalizeXPayoutStatus(payload: any): 'processing' | 'failed' | 'success' {
   const result = payload?.response?.result || payload?.data?.result || payload?.result || payload?.data || {};
+  const providerStatusCode = firstPresent(
+    payload?.provider_status_code,
+    payload?.providerStatusCode,
+    payload?.data?.provider_status_code,
+    payload?.data?.providerStatusCode,
+    result?.provider_status_code,
+    result?.providerStatusCode
+  );
+  const providerMessage = firstPresent(
+    payload?.provider_message,
+    payload?.providerMessage,
+    payload?.data?.provider_message,
+    payload?.data?.providerMessage,
+    result?.provider_message,
+    result?.providerMessage
+  )?.toLowerCase() || '';
 
   const explicitStatusText = [
     payload?.normalized_status,
@@ -100,8 +116,8 @@ function normalizeXPayoutStatus(payload: any): 'processing' | 'failed' | 'succes
     .filter((val) => val !== 'true' && val !== 'false')
     .join(' ');
 
-  if (/\b(processing|pending|initiated|created|queued|open)\b/.test(explicitStatusText)) {
-    return 'processing';
+  if ((providerStatusCode && /^[45]\d\d$/.test(providerStatusCode)) || /\b(no\s+pay\s+channel|none\s+satisfied|failed|failure|rejected|declined|error)\b/.test(providerMessage)) {
+    return 'failed';
   }
 
   if (/\b(failed|failure|reversed|reverse|timeout|timed\s*out|expired|expire|cancelled|canceled|declined|rejected|error|aborted)\b/.test(explicitStatusText) || explicitStatusText === '0') {
@@ -110,6 +126,10 @@ function normalizeXPayoutStatus(payload: any): 'processing' | 'failed' | 'succes
 
   if (/\b(success|successful|completed|complete|paid|captured|credit|credited|approved)\b/.test(explicitStatusText) || explicitStatusText === '1') {
     return 'success';
+  }
+
+  if (/\b(processing|pending|initiated|created|queued|open)\b/.test(explicitStatusText)) {
+    return 'processing';
   }
 
   if (/\b(failed|failure|reversed|reverse|timeout|timed\s*out|expired|expire|cancelled|canceled|declined|rejected|error|aborted)\b/.test(providerText)) {
@@ -129,7 +149,13 @@ function buildForwardPayload(payload: any): any {
 
   return {
     ...payload,
-    service_type: firstPresent(payload?.service_type, payload?.serviceType, result?.service_type, result?.serviceType, 'payin'),
+    service_type: firstPresent(
+      payload?.service_type,
+      payload?.serviceType,
+      result?.service_type,
+      result?.serviceType,
+      (payload?.account_number || payload?.ifsc || payload?.beneficiary_name || result?.account_number || result?.ifsc || result?.beneficiary_name) ? 'payout' : 'payin'
+    ),
     status: normalizedStatus,
     normalized_status: normalizedStatus,
     orderId: firstPresent(payload?.orderId, payload?.order_id, result?.orderId, result?.order_id),
@@ -151,12 +177,16 @@ function buildForwardPayload(payload: any): any {
   };
 }
 
-async function forwardToConnect(payload: any, req: NextRequest): Promise<any> {
+async function forwardToConnect(payload: any, req: { headers: Headers }): Promise<any> {
   const isPayout = payload?.service_type === 'payout';
+  const apiNumber = firstPresent(payload?.apiNumber, payload?.api_number, payload?.api, payload?.data?.apiNumber, payload?.data?.api_number);
+  const dynamicTarget = apiNumber
+    ? `https://connect.payatme.com/api/callback/${encodeURIComponent(apiNumber)}`
+    : null;
   const defaultTarget = isPayout ? DEFAULT_PAYOUT_TARGET_URL : DEFAULT_TARGET_URL;
   const envTarget = isPayout ? process.env.CONNECT_PAYOUT_CALLBACK_URL : process.env.CONNECT_CALLBACK_URL;
-  const targetUrl = envTarget || defaultTarget;
-  const timeoutMs = Number(process.env.FORWARD_TIMEOUT_MS || 2500);
+  const targetUrl = dynamicTarget || envTarget || defaultTarget;
+  const timeoutMs = Number(process.env.FORWARD_TIMEOUT_MS || 10000);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -211,15 +241,29 @@ async function handleRequest(req: NextRequest) {
   const incomingPayload = mergeQuery(parsedBody, req.nextUrl.searchParams);
   const forwardPayload = buildForwardPayload(incomingPayload);
 
-  const forwardResult = await forwardToConnect(forwardPayload, req);
+  const requestHeaders = new Headers(req.headers);
+
+  after(async () => {
+    const forwardResult = await forwardToConnect(forwardPayload, {
+      headers: requestHeaders
+    });
+
+    if (forwardResult.ok) {
+      console.log(
+        `[XPayout Callback Proxy] Forwarded callback to ${forwardResult.targetUrl} with status ${forwardResult.status}`
+      );
+    } else {
+      console.error(
+        `[XPayout Callback Proxy] Failed to forward callback to ${forwardResult.targetUrl}:`,
+        forwardResult.error || `HTTP ${forwardResult.status}`
+      );
+    }
+  });
 
   return NextResponse.json({
     Message: 'OK',
-    forwarded: forwardResult.ok,
-    targetStatus: forwardResult.status,
     normalized_status: forwardPayload.normalized_status,
-    target: forwardResult.targetUrl,
-    error: forwardResult.error || undefined
+    queued: true
   });
 }
 
